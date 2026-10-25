@@ -9,6 +9,19 @@ Core DocuBot class responsible for:
 
 import os
 import glob
+import re
+
+# Common words that carry no topical signal and would inflate match scores
+STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "to", "of", "in", "on",
+    "for", "and", "or", "it", "this", "that", "with", "as", "at", "by", "from",
+    "do", "does", "how", "what", "where", "which", "who", "why", "when", "i",
+    "we", "you", "my", "our", "can", "should", "there",
+}
+
+# Minimum number of query words a document must contain to count as relevant
+MIN_MATCHES = 2
+
 
 class DocuBot:
     def __init__(self, docs_folder="docs", llm_client=None):
@@ -48,9 +61,13 @@ class DocuBot:
     # Index Construction (Phase 1)
     # -----------------------------------------------------------
 
+    @staticmethod
+    def tokenize(text):
+        """Return the set of meaningful lowercase words in text (stopwords removed)."""
+        return set(re.findall(r"[a-z0-9_]+", text.lower())) - STOPWORDS
+
     def build_index(self, documents):
         """
-        TODO (Phase 1):
         Build a tiny inverted index mapping lowercase words to the documents
         they appear in.
 
@@ -59,12 +76,11 @@ class DocuBot:
             "token": ["AUTH.md", "API_REFERENCE.md"],
             "database": ["DATABASE.md"]
         }
-
-        Keep this simple: split on whitespace, lowercase tokens,
-        ignore punctuation if needed.
         """
         index = {}
-        # TODO: implement simple indexing
+        for filename, text in documents:
+            for word in self.tokenize(text):
+                index.setdefault(word, []).append(filename)
         return index
 
     # -----------------------------------------------------------
@@ -73,27 +89,33 @@ class DocuBot:
 
     def score_document(self, query, text):
         """
-        TODO (Phase 1):
-        Return a simple relevance score for how well the text matches the query.
-
-        Suggested baseline:
-        - Convert query into lowercase words
-        - Count how many appear in the text
-        - Return the count as the score
+        Return a simple relevance score: the number of query words
+        that appear in the text.
         """
-        # TODO: implement scoring
-        return 0
+        return len(self.tokenize(query) & self.tokenize(text))
 
     def retrieve(self, query, top_k=3):
         """
-        TODO (Phase 1):
-        Use the index and scoring function to select top_k relevant document snippets.
+        Use the index to find candidate documents, score them, and return
+        the top_k as (filename, text) sorted by score descending.
 
-        Return a list of (filename, text) sorted by score descending.
+        Guardrail: documents must match at least MIN_MATCHES meaningful query
+        words (or all of them, for very short queries). If nothing qualifies,
+        return an empty list so callers answer "I do not know".
         """
-        results = []
-        # TODO: implement retrieval logic
-        return results[:top_k]
+        query_words = self.tokenize(query)
+        if not query_words:
+            return []
+        min_score = min(MIN_MATCHES, len(query_words))
+
+        candidates = set()
+        for word in query_words:
+            candidates.update(self.index.get(word, []))
+
+        texts = dict(self.documents)
+        scores = {name: self.score_document(query, texts[name]) for name in candidates}
+        ranked = sorted(scores, key=lambda name: (-scores[name], name))
+        return [(name, texts[name]) for name in ranked[:top_k] if scores[name] >= min_score]
 
     # -----------------------------------------------------------
     # Answering Modes
